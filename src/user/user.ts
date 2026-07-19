@@ -2,6 +2,9 @@ import { Router, type Request, type Response } from "express";
 import z from "zod";
 import bcrypt from "bcrypt";
 import db from "../prisma";
+import boss from "../pgboss";
+import { WELCOME_EMAIL_QUEUE } from "../constant";
+import { fromPrisma } from "pg-boss";
 
 const userRouter: Router = Router();
 
@@ -33,13 +36,30 @@ userRouter.post("/register", async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Email already in use" });
     }
 
-    const user = await db.user.create({
-      data: { name, email, password: hashedPassword },
+    const user = await db.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: { name, email, password: hashedPassword },
+      });
+
+      await boss.send(
+        WELCOME_EMAIL_QUEUE,
+        {
+          email,
+          name,
+        },
+        {
+          db: fromPrisma(tx)
+        },
+      );
+
+      return user;
     });
+
+    // queue the welcome email
 
     return res
       .status(201)
-      .json({ message: "User created successfully", data: { id: user.id } });
+      .json({ message: "User created successfully", data: { id: user?.id } });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: "Internal server error" });
